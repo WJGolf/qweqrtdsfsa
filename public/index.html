@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Game Database</title>
+<style>
+  :root { --ink:#0d1118; --panel:#151b25; --raised:#1c2431; --line:#27324a; --mute:#8b97ad; --text:#e6ebf5; --accent:#7c8cff; --gold:#f2b84b; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--ink); color:var(--text); font-family: "Noto Sans Thai", system-ui, sans-serif; }
+  header { padding:16px; border-bottom:1px solid var(--line); display:flex; gap:12px; align-items:center; flex-wrap:wrap; position:sticky; top:0; background:var(--ink); }
+  h1 { margin:0; font-size:20px; }
+  input, select { background:var(--raised); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:8px 10px; font:inherit; }
+  input { flex:1; min-width:180px; max-width:360px; }
+  main { max-width:1100px; margin:0 auto; padding:16px; }
+  table { width:100%; border-collapse:collapse; background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden; font-size:14px; }
+  th, td { padding:8px 12px; text-align:left; border-bottom:1px solid var(--line); }
+  th { color:var(--mute); font-weight:500; white-space:nowrap; cursor:pointer; }
+  tr:hover td { background:var(--raised); }
+  .grade { color:var(--gold); }
+  .wrap { overflow-x:auto; }
+  .pager { display:flex; gap:12px; align-items:center; justify-content:space-between; margin-top:12px; color:var(--mute); font-size:14px; }
+  button { background:var(--raised); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:8px 14px; font:inherit; cursor:pointer; }
+  button:disabled { opacity:.4; cursor:default; }
+  button:focus-visible, input:focus-visible, select:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .msg { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:16px; color:var(--mute); }
+  @media (max-width:640px) { .hide-sm { display:none; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Game Database</h1>
+  <input id="q" type="search" placeholder="ค้นหาชื่อตัวละคร" aria-label="Search characters">
+  <select id="type" aria-label="Type"><option value="">Type: all</option><option>STR</option><option>INT</option></select>
+</header>
+<main>
+  <div id="msg" class="msg" hidden></div>
+  <div class="wrap">
+    <table id="table" hidden>
+      <thead>
+        <tr>
+          <th data-sort="name">Character</th><th data-sort="grade">Grade</th><th>Type</th><th>Element</th>
+          <th data-sort="atk" class="hide-sm">ATK</th><th data-sort="hp" class="hide-sm">HP</th><th data-sort="m_dps" class="hide-sm">M.DPS</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+  <div class="pager">
+    <span id="count"></span>
+    <span><button id="prev">Previous</button> <span id="page"></span> <button id="next">Next</button></span>
+  </div>
+</main>
+
+<script>
+  // Fill these two in (Supabase → Project Settings → API). The anon key is meant to be used in the browser.
+  const SUPABASE_URL = "";
+  const SUPABASE_ANON_KEY = "";
+  const PAGE_SIZE = 20;
+
+  const $ = (id) => document.getElementById(id);
+  let page = 1, sort = "grade", dir = "desc", total = 0;
+
+  function show(msg) { $("msg").textContent = msg; $("msg").hidden = !msg; }
+  const esc = (s) => String(s ?? "-").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const num = (n) => (n == null ? "-" : Number(n).toLocaleString());
+
+  async function load() {
+    if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+      show("ใส่ SUPABASE_URL และ SUPABASE_ANON_KEY ในไฟล์นี้ (บรรทัดบนสุดของ <script>) เพื่อแสดงข้อมูล");
+      return;
+    }
+    const params = new URLSearchParams({
+      select: "display_name,slug,grade,type,element_name,atk,hp,m_dps",
+      order: `${sort}.${dir}.nullslast`,
+    });
+    const q = $("q").value.trim().replace(/[%,()*\\]/g, " ");
+    if (q) params.set("display_name", `ilike.*${q}*`);
+    if ($("type").value) params.set("type", `eq.${$("type").value}`);
+    const from = (page - 1) * PAGE_SIZE;
+    try {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/character_list_view?${params}`, {
+        headers: {
+          apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+          Prefer: "count=exact", Range: `${from}-${from + PAGE_SIZE - 1}`,
+        },
+      });
+      if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+      total = Number((res.headers.get("content-range") || "*/0").split("/")[1]) || 0;
+      render(await res.json());
+    } catch (e) {
+      show("โหลดข้อมูลไม่สำเร็จ: " + e.message + " (ตรวจว่ารัน SQL 0001–0004 แล้ว)");
+    }
+  }
+
+  function render(rows) {
+    show(rows.length ? "" : "ไม่พบตัวละครที่ตรงกับเงื่อนไข");
+    $("table").hidden = rows.length === 0;
+    $("rows").innerHTML = rows.map((r) => `
+      <tr>
+        <td>${esc(r.display_name)}</td><td class="grade">${esc(r.grade)}★</td><td>${esc(r.type)}</td><td>${esc(r.element_name)}</td>
+        <td class="hide-sm">${num(r.atk)}</td><td class="hide-sm">${num(r.hp)}</td><td class="hide-sm">${num(r.m_dps)}</td>
+      </tr>`).join("");
+    const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    $("count").textContent = `${total.toLocaleString()} characters`;
+    $("page").textContent = `Page ${page} of ${pages}`;
+    $("prev").disabled = page <= 1;
+    $("next").disabled = page >= pages;
+  }
+
+  let timer;
+  $("q").addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(() => { page = 1; load(); }, 300); });
+  $("type").addEventListener("change", () => { page = 1; load(); });
+  $("prev").addEventListener("click", () => { page--; load(); });
+  $("next").addEventListener("click", () => { page++; load(); });
+  document.querySelectorAll("th[data-sort]").forEach((th) => th.addEventListener("click", () => {
+    const key = th.dataset.sort;
+    dir = sort === key && dir === "desc" ? "asc" : "desc";
+    sort = key; page = 1; load();
+  }));
+  load();
+</script>
+</body>
+</html>
